@@ -1,0 +1,625 @@
+Sections:
+00: "seg1000" (1000-13AE)
+
+
+Source: "disassembler_test.asm"
+                        	     1: ; GENERAL EQUATES
+                        	     2: NULL			= $00
+                        	     3: CTRLC			= $03				; Control-C (Break)
+                        	     4: CTRLG			= $07				; Control-G (Bell)
+                        	     5: BKSP			= $08				; Backspace
+                        	     6: TAB				= $09				; Horizontal tab
+                        	     7: LF				= $0A				; Line-feed character
+                        	     8: CS				= $0C				; Clear Screen
+                        	     9: CR				= $0D				; Carriage-return character
+                        	    10: CTRLO			= $0F				; Control "O"
+                        	    11: CTRLQ			= $11				; Control "Q"
+                        	    12: CTRLR			= $12				; Control "R"
+                        	    13: CTRLS			= $13				; Control "S"
+                        	    14: CTRLU			= $15				; Control "U"
+                        	    15: ESC				= $1B				; Escape
+                        	    16: SPACE			= $20				; Space character
+                        	    17: DEL				= $7F				; Delete
+                        	    18: 
+                        	    19: DELIMITER		= " "				; Space delimiter between command line parameters
+                        	    20: ERRORPTR		= "^"				; Error pointer symbol (used for pointing to the error position on command line)
+                        	    21: QUOTE			= $22
+                        	    22: JUMP			= $C3				; Delimiter for command list items (It's the actual jp command opcode)
+                        	    23: HELP			= $0F
+                        	    24: EOT				= $FF				; End of table
+                        	    25: 
+                        	    26: ;PARAMETERS
+                        	    27: HorizTextRes	= 40				; Horizontal text resolution (40 or 80)
+                        	    28: VertTextRes		= 24				; Vertical text resolution (typical 24 or 25)
+                        	    29: ErrorPtrOffset	= 8					; Take into account the command prompt width
+                        	    30: BytesFree		= (VectorTable-EndOfCode)+(StartOfCode-InterruptVectorEnd)	; Base free bytes
+                        	    31: 
+                        	    32: ; I/O ADDRESSES
+                        	    33: SIO_PortA_Data	= $00				; SIO data port A
+                        	    34: SIO_PortB_Data	= $01				; SIO data port B
+                        	    35: SIO_PortA_Ctrl	= $02				; SIO control port A
+                        	    36: SIO_PortB_Ctrl	= $03				; SIO control port B
+                        	    37: ClockSelect		= $28				; Clock speed selection address (values $00 to $03)
+                        	    38: BankSelect		= $30				; RAM bank select address (values ($00 to $0E)
+                        	    39: RomDisable		= $38				; ROM dissable address (any value)
+                        	    40: 
+                        	    41: Ascii2HexNibble		= $FE00				; [A -> A][A -> A]
+                        	    42: Ascii2HexByte		= $FE03				; [(HL) -> A][(HL) -> A]
+                        	    43: Ascii2HexWord		= $FE06				; [(HL) -> BC][(HL) -> BC]
+                        	    44: ClearScreen			= $FE09				; [][]
+                        	    45: GetHexParameter		= $FE0C				; [(HL) -> BC,A,(HL)][(HL) -> BC,A,(HL)]
+                        	    46: PrintChar			= $FE0F				; [A ->][A ->]
+                        	    47: PrintString			= $FE12				; [HL ->][HL ->]
+                        	    48: PrintCRLF			= $FE15				; [][]
+                        	    49: PrintNibble			= $FE18				; [A ->][A ->]
+                        	    50: PrintByte			= $FE1B				; [A ->][A ->]
+                        	    51: PrintWord			= $FE1E				; [HL ->][HL ->]
+                        	    52: RangeValidation		= $FE21				; Start&EndAddress -> C, Start&EndAddress, Start&EndAddressAlt)
+                        	    53: ReadChar			= $FE24				; [-> A][-> A]
+                        	    54: ReadCharNoWait		= $FE27
+                        	    55: ReadString			= $FE2A				; [HL ->][HL ->]
+                        	    56: ReadByte			= $FE2D				; [-> A][-> A]
+                        	    57: ReadWord			= $FE30				; [-> HL][-> HL]
+                        	    58: SkipSpaces			= $FE33				; [HL -> HL][HL -> HL]
+                        	    59: UpperCase			= $FE36				; [A -> A][A -> A]
+                        	    60: Registers			= $FE39				; [][]
+                        	    61: Dec2Hex				= $FE3C				; [(HL) -> BC]
+                        	    62: 
+                        	    63: InterruptVectorEnd	= $FD00			; End of interrupt vector table
+                        	    64: VectorTable			= $FD02			; Start of vector and jump tables
+                        	    65: StartOfCode			= $FD04			; Start of code address
+                        	    66: EndOfCode			= $FD06			; End of code address
+                        	    67: 
+                        	    68: 	.org $1000
+                        	    69: 
+                        	    70: Start:
+00:1000 010000          	    71: 	ld		BC,$0000
+00:1003 ED432D10        	    72: 	ld		(CurrentAddress),BC
+00:1007 212810          	    73: 	ld		HL,CommandBuffer
+00:100A CD0E10          	    74: 	call	Disassemble
+00:100D C9              	    75: 	ret
+                        	    76: 
+                        	    77: Disassemble:
+00:100E F5              	    78: 	push	AF
+00:100F C5              	    79: 	push	BC
+00:1010 D5              	    80: 	push	DE
+00:1011 E5              	    81: 	push	HL
+                        	    82: 
+                        	    83: ;	ld		HL,(BufferPointer)		; Restore current buffer pointer in HL
+00:1012 CD0CFE          	    84: 	call	GetHexParameter			; Get parameter: the start address to disassemble
+00:1015 300C            	    85: 	jr		nc,DisassembleEnd		; Exit routine if there was an error in the parameter
+00:1017 FE00            	    86: 	cp		0						; Is there a parameter?
+00:1019 2004            	    87: 	jr		nz,DisDefaultLines		; If There's a parameter, go check second parameter
+00:101B ED4B2D10        	    88: 	ld		BC,(CurrentAddress)		; Since it's no parameter, then place CurrentAddress as default address
+                        	    89: 
+                        	    90: DisDefaultLines:
+00:101F C5              	    91: 	push	BC						; Save address
+00:1020 E1              	    92: 	pop		HL						;	to HL
+                        	    93: 	
+00:1021 0E15            	    94: 	ld		C,VertTextRes-3			; Get number of vertical lines
+                        	    95: 
+                        	    96: 
+                        	    97: 
+                        	    98: 
+                        	    99: 
+                        	   100: 
+                        	   101: 
+                        	   102: DisassembleEnd:
+00:1023 E1              	   103: 	pop		HL
+00:1024 D1              	   104: 	pop		DE
+00:1025 C1              	   105: 	pop		BC
+00:1026 F1              	   106: 	pop		AF
+00:1027 C9              	   107: 	ret
+                        	   108: 
+                        	   109: 	
+                        	   110: ;  __  __
+                        	   111: ; |	 \/	 |	 ___   ___	 ___	__ _	__ _	___	  ___
+                        	   112: ; | |\/| |	/ _ \ / __| / __|  / _` |  / _` |  / _ \ / __|
+                        	   113: ; | |  | | |  __/ \__ \ \__ \ | (_| | | (_| | |	 __/ \__ \
+                        	   114: ; |_|  |_|	\___| |___/ |___/  \__,_|  \__, |  \___| |___/
+                        	   115: ;									   |___/
+                        	   116: ; ---------------------------------------------------------------------------------------------------------------------
+                        	   117: ; SYSTEM MESSAGES, INCLUDING ERROR MESSAGES
+                        	   118: 
+                        	   119: 
+                        	   120: 
+                        	   121: 
+                        	   122: ; __	 __					_			_		_
+                        	   123: ; \ \	/ /	  __ _	 _ __  (_)	 __ _  | |__   | |	 ___   ___
+                        	   124: ;  \ \ / /	 / _` | | '__| | |	/ _` | | '_ \  | |	/ _ \ / __|
+                        	   125: ;	\ V /	| (_| | | |	   | | | (_| | | |_) | | | |  __/ \__ \
+                        	   126: ;	 \_/	 \__,_| |_|	   |_|	\__,_| |_.__/  |_|	\___| |___/
+                        	   127: ;
+                        	   128: ; ---------------------------------------------------------------------------------------------------------------------
+                        	   129: ; VARIABLES AT THE END OF THE CODE ARE DECLARED IN BYTE SIZE
+                        	   130: 
+00:1028 38303030        	   131: CommandBuffer:		db	"8000",NULL		; Command prompt buffer
+00:102C 00
+00:102D 00              	   132: CurrentAddress		ds	2				; 
+00:102E *
+00:102F 00              	   133: StartAddress:		ds	2				; Original start or source address
+00:1030 *
+00:1031 00              	   134: EndAddress:			ds	2				; Original end or destination address
+00:1032 *
+00:1033 00              	   135: StartAddressAlt:	ds	2				; Original start or source address
+00:1034 *
+00:1035 00              	   136: EndAddressAlt:		ds	2				; Original end or destination address
+00:1036 *
+                        	   137: 
+                        	   138: 
+                        	   139: ; Data for disassembler
+                        	   140: ; ---------------------------------------------------------------------------------------------------------------------
+                        	   141: ; Parameter 1: OpCode #1
+                        	   142: ; Parameter 2: Number of OpCode bytes (MSB), Number of Operands (LSB)
+                        	   143: ; Parameter 3: Next OpCode(s) if any
+                        	   144: ; Parameter 4: Mnemonic (Terminated by bit7 high to save space)
+                        	   145: 
+                        	   146: InstructionSet:
+00:1037 00              	   147: 	db		$00,$10,			"NO","P"+$80
+00:1038 10
+00:1039 4E4F
+00:103B D0
+00:103C 01              	   148: 	db		$01,$12,			"LD BC,1","*"+$80
+00:103D 12
+00:103E 4C442042432C31
+00:1045 AA
+00:1046 02              	   149: 	db		$02,$10,			"LD (BC),","A"+$80
+00:1047 10
+00:1048 4C4420284243292C
+00:1050 C1
+00:1051 02              	   150: 	db		$02,$20,$03,		"LDI (BC),","A"+$80
+00:1052 20
+00:1053 03
+00:1054 4C44492028424329
+00:105C 2C
+00:105D C1
+00:105E 02              	   151: 	db		$02,$20,$0B,		"LDD (BC),","A"+$80
+00:105F 20
+00:1060 0B
+00:1061 4C44442028424329
+00:1069 2C
+00:106A C1
+00:106B 03              	   152: 	db		$03,$10,			"INC B","C"+$80
+00:106C 10
+00:106D 494E432042
+00:1072 C3
+00:1073 04              	   153: 	db		$04,$10,			"INC ","B"+$80
+00:1074 10
+00:1075 494E4320
+00:1079 C2
+00:107A 06              	   154: 	db		$06,$11,			"LD B,","*"+$80
+00:107B 11
+00:107C 4C4420422C
+00:1081 AA
+00:1082 07              	   155: 	db		$07,$10,			"RLC","A"+$80
+00:1083 10
+00:1084 524C43
+00:1087 C1
+00:1088 08              	   156: 	db		$08,$10,			"EX AF,AF","'"+$80
+00:1089 10
+00:108A 45582041462C4146
+00:1092 A7
+00:1093 09              	   157: 	db		$09,$10,			"ADD HL,B","C"+$80
+00:1094 10
+00:1095 41444420484C2C42
+00:109D C3
+00:109E 0A              	   158: 	db		$0A,$10,			"LD A,(BC",")"+$80
+00:109F 10
+00:10A0 4C4420412C284243
+00:10A8 A9
+00:10A9 0A              	   159: 	db		$0A,$20,$03,		"LDI A,(BC",")"+$80
+00:10AA 20
+00:10AB 03
+00:10AC 4C444920412C2842
+00:10B4 43
+00:10B5 A9
+00:10B6 0A              	   160: 	db		$0A,$20,$0B,		"LDD A,(BC",")"+$80
+00:10B7 20
+00:10B8 0B
+00:10B9 4C444420412C2842
+00:10C1 43
+00:10C2 A9
+00:10C3 0B              	   161: 	db		$0B,$10,			"DEC B","C"+$80
+00:10C4 10
+00:10C5 4445432042
+00:10CA C3
+00:10CB 0D              	   162: 	db		$0D,$10,			"DEC ","C"+$80
+00:10CC 10
+00:10CD 44454320
+00:10D1 C3
+00:10D2 0E              	   163: 	db		$0E,$11,			"LD C,","*"+$80
+00:10D3 11
+00:10D4 4C4420432C
+00:10D9 AA
+00:10DA 0F              	   164: 	db		$0F,$10,			"RRC","A"+$80
+00:10DB 10
+00:10DC 525243
+00:10DF C1
+00:10E0 10              	   165: 	db		$10,$12,			"DJNZ ","*"+$80
+00:10E1 12
+00:10E2 444A4E5A20
+00:10E7 AA
+00:10E8 11              	   166: 	db		$11,$12,			"LD DE,","*"+$80
+00:10E9 12
+00:10EA 4C442044452C
+00:10F0 AA
+00:10F1 12              	   167: 	db		$12,$10,			"LD (DE),","A"+$80
+00:10F2 10
+00:10F3 4C4420284445292C
+00:10FB C1
+00:10FC 12              	   168: 	db		$12,$10,$13,		"LDI (DE),","A"+$80
+00:10FD 10
+00:10FE 13
+00:10FF 4C44492028444529
+00:1107 2C
+00:1108 C1
+00:1109 12              	   169: 	db		$12,$10,$1B,		"LDD (DE),","A"+$80
+00:110A 10
+00:110B 1B
+00:110C 4C44442028444529
+00:1114 2C
+00:1115 C1
+00:1116 13              	   170: 	db		$13,$10,			"INC D","E"+$80
+00:1117 10
+00:1118 494E432044
+00:111D C5
+00:111E 14              	   171: 	db		$14,$10,			"INC ","D"+$80
+00:111F 10
+00:1120 494E4320
+00:1124 C4
+00:1125 15              	   172: 	db		$15,$10,			"DEC ","D"+$80
+00:1126 10
+00:1127 44454320
+00:112B C4
+00:112C 16              	   173: 	db		$16,$11,			"LD D,","*"+$80
+00:112D 11
+00:112E 4C4420442C
+00:1133 AA
+00:1134 17              	   174: 	db		$17,$10,			"RL","A"+$80
+00:1135 10
+00:1136 524C
+00:1138 C1
+00:1139 18              	   175: 	db		$18,$12,			"JR ","*"+$80
+00:113A 12
+00:113B 4A5220
+00:113E AA
+00:113F 19              	   176: 	db		$19,$10,			"ADD HL,D","E"+$80
+00:1140 10
+00:1141 41444420484C2C44
+00:1149 C5
+00:114A 1A              	   177: 	db		$1A,$10,			"LD A,(DE",")"+$80
+00:114B 10
+00:114C 4C4420412C284445
+00:1154 A9
+00:1155 1A              	   178: 	db		$1A,$20,$13,		"LDI A,(DE",")"+$80
+00:1156 20
+00:1157 13
+00:1158 4C444920412C2844
+00:1160 45
+00:1161 A9
+00:1162 1A              	   179: 	db		$1A,$20,$1B,		"LDD A,(DE",")"+$80
+00:1163 20
+00:1164 1B
+00:1165 4C444420412C2844
+00:116D 45
+00:116E A9
+00:116F 1B              	   180: 	db		$1B,$10,			"DEC D","E"+$80
+00:1170 10
+00:1171 4445432044
+00:1176 C5
+00:1177 1C              	   181: 	db		$1C,$10,			"INC ","E"+$80
+00:1178 10
+00:1179 494E4320
+00:117D C5
+00:117E 1D              	   182: 	db		$1D,$10,			"DEC ","E"+$80
+00:117F 10
+00:1180 44454320
+00:1184 C5
+00:1185 1E              	   183: 	db		$1E,$11,			"LD E,","*"+$80
+00:1186 11
+00:1187 4C4420452C
+00:118C AA
+00:118D 1F              	   184: 	db		$1F,$10,			"RR","A"+$80
+00:118E 10
+00:118F 5252
+00:1191 C1
+00:1192 20              	   185: 	db		$20,$12,			"JR NZ,","*"+$80
+00:1193 12
+00:1194 4A52204E5A2C
+00:119A AA
+00:119B 21              	   186: 	db		$21,$12,			"LD HL,","*"+$80
+00:119C 12
+00:119D 4C4420484C2C
+00:11A3 AA
+00:11A4 22              	   187: 	db		$22,$12,			"LD (*),H","L"+$80
+00:11A5 12
+00:11A6 4C4420282A292C48
+00:11AE CC
+00:11AF 23              	   188: 	db		$23,$10,			"INC H","L"+$80
+00:11B0 10
+00:11B1 494E432048
+00:11B6 CC
+00:11B7 24              	   189: 	db		$24,$10,			"INC ","H"+$80
+00:11B8 10
+00:11B9 494E4320
+00:11BD C8
+00:11BE 25              	   190: 	db		$25,$10,			"DEC ","H"+$80
+00:11BF 10
+00:11C0 44454320
+00:11C4 C8
+00:11C5 26              	   191: 	db		$26,$11,			"LD H,","*"+$80
+00:11C6 11
+00:11C7 4C4420482C
+00:11CC AA
+00:11CD 27              	   192: 	db		$27,$10,			"DA","A"+$80
+00:11CE 10
+00:11CF 4441
+00:11D1 C1
+00:11D2 28              	   193: 	db		$28,$12,			"LD (*),H","L"+$80
+00:11D3 12
+00:11D4 4C4420282A292C48
+00:11DC CC
+00:11DD 29              	   194: 	db		$29,$10,			"ADD, HL,H","L"+$80
+00:11DE 10
+00:11DF 4144442C20484C2C
+00:11E7 48
+00:11E8 CC
+00:11E9 2A              	   195: 	db		$2A,$12,			"LD HL,(*",")"+$80
+00:11EA 12
+00:11EB 4C4420484C2C282A
+00:11F3 A9
+00:11F4 2B              	   196: 	db		$2B,$10,			"DEC H","L"+$80
+00:11F5 10
+00:11F6 4445432048
+00:11FB CC
+00:11FC 2C              	   197: 	db		$2C,$10,			"INC ","L"+$80
+00:11FD 10
+00:11FE 494E4320
+00:1202 CC
+00:1203 2D              	   198: 	db		$2D,$10,			"DEC ","L"+$80
+00:1204 10
+00:1205 44454320
+00:1209 CC
+00:120A 2E              	   199: 	db		$2E,$11,			"LD L,","*"+$80
+00:120B 11
+00:120C 4C44204C2C
+00:1211 AA
+00:1212 2F              	   200: 	db		$2F,$10,			"CP","L"+$80
+00:1213 10
+00:1214 4350
+00:1216 CC
+00:1217 30              	   201: 	db		$30,$12,			"JR NC,","*"+$80
+00:1218 12
+00:1219 4A52204E432C
+00:121F AA
+00:1220 31              	   202: 	db		$31,$12,			"LD SP,","*"+$80
+00:1221 12
+00:1222 4C442053502C
+00:1228 AA
+00:1229 32              	   203: 	db		$32,$12,			"LD (*),","A"+$80
+00:122A 12
+00:122B 4C4420282A292C
+00:1232 C1
+00:1233 33              	   204: 	db		$33,$10,			"INC S","P"+$80
+00:1234 10
+00:1235 494E432053
+00:123A D0
+00:123B 34              	   205: 	db		$34,$10,			"INC (HL",")"+$80
+00:123C 10
+00:123D 494E432028484C
+00:1244 A9
+00:1245 35              	   206: 	db		$35,$10,			"DEC (HL",")"+$80
+00:1246 10
+00:1247 4445432028484C
+00:124E A9
+00:124F 36              	   207: 	db		$36,$11,			"LD (HL),","*"+$80
+00:1250 11
+00:1251 4C442028484C292C
+00:1259 AA
+00:125A 36              	   208: 	db		$36,$31,$BB,$23,	"LDI (HL),","*"+$80
+00:125B 31
+00:125C BB
+00:125D 23
+00:125E 4C44492028484C29
+00:1266 2C
+00:1267 AA
+00:1268 36              	   209: 	db		$36,$31,$BB,$2B,	"LDD (HL),","*"+$80
+00:1269 31
+00:126A BB
+00:126B 2B
+00:126C 4C44442028484C29
+00:1274 2C
+00:1275 AA
+00:1276 37              	   210: 	db		$37,$10,			"SC","F"+$80
+00:1277 10
+00:1278 5343
+00:127A C6
+00:127B 38              	   211: 	db		$38,$12,			"JR C,","*"+$80
+00:127C 12
+00:127D 4A5220432C
+00:1282 AA
+00:1283 39              	   212: 	db		$39,$12,			"ADD HL,S","P"+$80
+00:1284 12
+00:1285 41444420484C2C53
+00:128D D0
+00:128E 3A              	   213: 	db		$3A,$12,			"LD A,(*",")"+$80
+00:128F 12
+00:1290 4C4420412C282A
+00:1297 A9
+00:1298 3B              	   214: 	db		$3B,$10,			"DEC S","P"+$80
+00:1299 10
+00:129A 4445432053
+00:129F D0
+00:12A0 3D              	   215: 	db		$3D,$10,			"DEC ","A"+$80
+00:12A1 10
+00:12A2 44454320
+00:12A6 C1
+00:12A7 3E              	   216: 	db		$3E,$11,			"LD A,","*"+$80
+00:12A8 11
+00:12A9 4C4420412C
+00:12AE AA
+00:12AF 3F              	   217: 	db		$3F,$10,			"CC","F"+$80
+00:12B0 10
+00:12B1 4343
+00:12B3 C6
+00:12B4 40              	   218: 	db		$40,$10,			"LD B,","B"+$80
+00:12B5 10
+00:12B6 4C4420422C
+00:12BB C2
+00:12BC 40              	   219: 	db		$40,$10,$49,		"LD BC,B","C"+$80
+00:12BD 10
+00:12BE 49
+00:12BF 4C442042432C42
+00:12C6 C3
+00:12C7 41              	   220: 	db		$41,$10,			"LD B,","C"+$80
+00:12C8 10
+00:12C9 4C4420422C
+00:12CE C3
+00:12CF 42              	   221: 	db		$42,$10,			"LD B,","D"+$80
+00:12D0 10
+00:12D1 4C4420422C
+00:12D6 C4
+00:12D7 42              	   222: 	db		$42,$10,$4B,		"LD BC,D","E"+$80
+00:12D8 10
+00:12D9 4B
+00:12DA 4C442042432C44
+00:12E1 C5
+00:12E2 43              	   223: 	db		$43,$10,			"LD B,","E"+$80
+00:12E3 10
+00:12E4 4C4420422C
+00:12E9 C5
+00:12EA 44              	   224: 	db		$44,$10,			"LD B,","H"+$80
+00:12EB 10
+00:12EC 4C4420422C
+00:12F1 C8
+00:12F2 44              	   225: 	db		$44,$10,$4D,		"LD BC,H","L"+$80
+00:12F3 10
+00:12F4 4D
+00:12F5 4C442042432C48
+00:12FC CC
+00:12FD 45              	   226: 	db		$45,$10,			"LD B,","L"+$80
+00:12FE 10
+00:12FF 4C4420422C
+00:1304 CC
+00:1305 46              	   227: 	db		$46,$10,			"LD B,(HL",")"+$80
+00:1306 10
+00:1307 4C4420422C28484C
+00:130F A9
+00:1310 46              	   228: 	db		$46,$10,$23,		"LDI B,(HL",")"+$80
+00:1311 10
+00:1312 23
+00:1313 4C444920422C2848
+00:131B 4C
+00:131C A9
+00:131D 46              	   229: 	db		$46,$10,$2B,		"LDD B,(HL",")"+$80
+00:131E 10
+00:131F 2B
+00:1320 4C444420422C2848
+00:1328 4C
+00:1329 A9
+00:132A 47              	   230: 	db		$47,$10,			"LD B,","A"+$80
+00:132B 10
+00:132C 4C4420422C
+00:1331 C1
+00:1332 48              	   231: 	db		$48,$10,			"LD C,","B"+$80
+00:1333 10
+00:1334 4C4420432C
+00:1339 C2
+00:133A 49              	   232: 	db		$49,$10,			"LD C,","C"+$80
+00:133B 10
+00:133C 4C4420432C
+00:1341 C3
+00:1342 4A              	   233: 	db		$4A,$10,			"LD C,","D"+$80
+00:1343 10
+00:1344 4C4420432C
+00:1349 C4
+00:134A 4B              	   234: 	db		$4B,$10,			"LD C,","E"+$80
+00:134B 10
+00:134C 4C4420432C
+00:1351 C5
+00:1352 4C              	   235: 	db		$4C,$10,			"LD C,","H"+$80
+00:1353 10
+00:1354 4C4420432C
+00:1359 C8
+00:135A 4D              	   236: 	db		$4D,$10,			"LD C,","L"+$80
+00:135B 10
+00:135C 4C4420432C
+00:1361 CC
+00:1362 4E              	   237: 	db		$4E,$10,			"LD C,(HL",")"+$80
+00:1363 10
+00:1364 4C4420432C28484C
+00:136C A9
+00:136D 4E              	   238: 	db		$4E,$10,$23,		"LDI C,(HL",")"+$80
+00:136E 10
+00:136F 23
+00:1370 4C444920432C2848
+00:1378 4C
+00:1379 A9
+00:137A 4E              	   239: 	db		$4E,$10,$23,$46,$23,"LDI BC,(HL",")"+$80
+00:137B 10
+00:137C 23
+00:137D 46
+00:137E 23
+00:137F 4C44492042432C28
+00:1387 484C
+00:1389 A9
+00:138A 4E              	   240: 	db		$4E,$10,$23,$46,$2B,"LD BC,(HL",")"+$80
+00:138B 10
+00:138C 23
+00:138D 46
+00:138E 2B
+00:138F 4C442042432C2848
+00:1397 4C
+00:1398 A9
+00:1399 4E              	   241: 	db		$4E,$10,$2B,		"LDD C,(HL",")"+$80
+00:139A 10
+00:139B 2B
+00:139C 4C444420432C2848
+00:13A4 4C
+00:13A5 A9
+00:13A6 4F              	   242: 	db		$4F,$10,			"LD C,","A"+$80
+00:13A7 10
+00:13A8 4C4420432C
+00:13AD C1
+                        	   243: 	
+
+
+Symbols by name:
+CommandBuffer                    A:1028
+CurrentAddress                   A:102D
+Disassemble                      A:100E
+DisassembleEnd                   A:1023
+DisDefaultLines                  A:101F
+EndAddress                       A:1031
+EndAddressAlt                    A:1035
+EndOfCode                        E:FD06
+GetHexParameter                  E:FE0C
+InstructionSet                   A:1037
+InterruptVectorEnd               E:FD00
+NULL                             E:0000
+Start                            A:1000
+StartAddress                     A:102F
+StartAddressAlt                  A:1033
+StartOfCode                      E:FD04
+VectorTable                      E:FD02
+VertTextRes                      E:0018
+
+Symbols by value:
+0000 NULL
+0018 VertTextRes
+1000 Start
+100E Disassemble
+101F DisDefaultLines
+1023 DisassembleEnd
+1028 CommandBuffer
+102D CurrentAddress
+102F StartAddress
+1031 EndAddress
+1033 StartAddressAlt
+1035 EndAddressAlt
+1037 InstructionSet
+FD00 InterruptVectorEnd
+FD02 VectorTable
+FD04 StartOfCode
+FD06 EndOfCode
+FE0C GetHexParameter

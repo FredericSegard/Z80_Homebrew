@@ -91,9 +91,11 @@ SysInfoMsg:
 	db		"- CPU:   Z84C00 Z80 @",0,"7.3728 MHz",CR,LF
 	db		"- ROM:   64KB FLASH (Shadow ROM)",CR,LF
 	db		"- RAM:   64KB SRAM, ",0," bytes free",CR,LF
-	db		"- BANKS: 480KB (15x 32KB in low RAM)",CR,LF
+	db		"- BANKS: 480KB (15x 32KB in lower RAM)",CR,LF
 	db		"- UART:  Z84C40 SIO/0",CR,LF
 	db		LF,0
+
+
 
 
 ;  __  __                                                 
